@@ -186,6 +186,16 @@ class Command:
 
 # idea: just give all the things the same handler, dumbass
 
+# for error messages we also kiiinda want the same handler?
+
+# in input loop:
+# 1) categorize into big categories based on start
+# 2) inside the big category, try to categorize based on arguments
+# 3) if it fails all the tests DUE TO CONSTANTS, 
+#
+# idea: aren't 'new' and 'other' pretty similar?
+# 
+
 class Scheduler:
     def __init__(self, data):
         self.data = data
