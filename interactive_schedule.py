@@ -61,15 +61,6 @@ YES_MAYBE_NO_QUESTIONS = [COOK, BIGCOOK, CLEAN, COOK_MON, CLEAN_MON, COOK_TUE, C
 
 SHIFT_TYPES = ["bigcook", "littlecook", "clean"] # N.B. if names are changed here, also change them in Shift.__init__
 
-# Show people who want to cook together
-# Suggest + explain next steps (maybe do lookaheads to advise which ones will not be possible?):
-#   - put people who are the only "yes" for a shift on that shift
-#   - put people who only have "yes" on one remaining shift (or 2 if they're full-mealplan) on that shift
-#   - pair people who want to be together
-#   - put new people who want to cook on little cook shifts
-#   - put new people who want to clean on cleaning shifts with non-new people 
-#   - assign people who have multiple shifts left to fill
-
 MON = "Mon"
 TUE = "Tue"
 WED = "Wed"
@@ -87,6 +78,14 @@ WEEK2 = 2
 MAYBE_TYPE = 2
 MAYBE_TIME = 3
 MAYBE_BIGCOOK = 4
+
+# return codes for input handling
+REDISPLAY = True
+ASK_AGAIN = False
+
+# The exception type raised when the input can't be handled properly.
+class InputError(Exception):
+    pass
 
 class Shift:
     id_counter = 0
@@ -127,6 +126,275 @@ def generate_shifts():
                     # duplicate cleaning shifts
                     shifts.append(Shift(t, day, week))
     return shifts
+
+def get_input(self, prompt="Enter your move or type 'help' for options: "):
+    x = input(prompt).strip().lower()
+
+def get_args(input_text, lead_words, nargs):
+    args = [a.strip() for a in input_text.split(" ") if a.strip() != ""]
+    nlead = len(lead_words.split(" "))
+    if len(args) - nlead == nargs:
+        return args
+    raise InputError("Unexpected number of arguments to '%s'! Expected %s arguments but got %s : %s" %(lead_words, nargs, len(args) - nlead, ", ".join(args[nlead:])))
+
+class Command:
+    # TODO: maybe move these out of this class
+    PERSON_ARG = "<person>"
+    SHIFT_ARG = "<shift>"
+    PEOPLE = None
+    SHIFTS = None
+
+    # arg_types should be a list of strings, where each string can be either PERSON_ARG, SHIFT_ARG, or a constant 
+    def __init__(self, name, arg_types, handler, descr):
+        self.name = name
+        self.arg_types = arg_types
+        self.handler = handler
+        self.descr = descr
+        self.name_args = self.name.split(" ")
+    
+    def check_arg(arg, arg_type):
+        if arg_type == PERSON_ARG:
+            if not arg in PEOPLE:
+                raise InputError("Unrecognized person %s. Recognized people are : " %(arg, ", ".join(Command.PEOPLE)))
+        elif arg_type == SHIFT_ARG:
+            if not arg in SHIFTS:
+                raise InputError("Unrecognized shift %s. Recognized shifts are : %s" %(arg, ", ".join(Command.SHIFTS)))
+        elif arg != arg_type:
+            raise InputError("Unexpected argument to %s: '%s'. Expected something like '%s'" %(self, arg, arg_type))
+
+    # returns None if the command is not one of this type, and raises an error if the incorrect number/type of arguments are provided
+    def get_args(self, cmd):
+        if not cmd.startswith(self.name):
+            return None
+        args = [a.strip() for a in input_text.split(" ") if a.strip() != ""][len(self.name_args):]
+        if len(args) == len(arg_types):
+            for a, t in zip(args, arg_types):
+                self.check_arg(arg, arg_type) # raises an exception if the argument isn't the right type
+            return args
+        raise InputError("Unexpected number of arguments to '%s'. Expected %s arguments but got %s : %s" %(self, len(arg_types), len(args), ", ".join(args)))
+
+    def __str__(self):
+        return self.name
+
+# we want the commands listed only ONCE
+# maybe in scheduler init, we create all the commands, initializing people and shifts and handlers, and add them to a constant list
+# then in input loop, we go through the list and call the right handlers
+# in display_help, we also go through the same list
+
+# Problem: in help we want all combinatorial options listed out, with separate messages
+# in handlers and input loop, we don't want them separate
+
+# idea: just give all the things the same handler, dumbass
+
+class Scheduler:
+    def __init__(self, data):
+        self.data = data
+        self.shifts = generate_shifts()
+        self.people = list(data.keys())
+        self.shift_person_rules = {}
+        self.person_person_rules = {}
+        self.rule_commands = {}
+        self.rule_counter = 0
+        self.other_assignments = {week : [] for week in [WEEK1, WEEK2]}
+        self.assignments = {}
+        self.autoassign = True
+        self.initialize_commands()
+
+    def initialize_commands(self)
+        # initialize the Command class with people and shifts, so it can check its arguments
+        Command.PEOPLE = self.people
+        Command.SHIFTS = list(set([shift_name(s) for s in self.shifts]))
+
+    def run(self):
+        self.step_and_display()
+        self.show_welcome()
+        while True:
+            cmd = get_input()
+            if cmd == "exit":
+                return
+            redisplay = self.handle_input(cmd)
+            if redisplay:
+                self.step_and_display()
+                if self.is_complete():
+                    print("ALL SHIFTS ASSIGNED!") # TODO: put this in display_unassigned and rename to display_end_msg
+                    self.display_unassigned_people()
+                    cmd = get_input(msg="Type 'exit' to end the program; type anything else to continue: ")
+                    if cmd == "exit":
+                        return
+    
+    def handle_input(self, x):
+        try:
+            return self.handle_input_cases(x)
+        except InputError as err:
+            print(err)
+            return ASK_AGAIN
+
+    def handle_input_cases(self, x):
+        if x == "help":
+            display_help(people, shifts)
+            return ASK_AGAIN
+        elif x == "show status":
+            return REDISPLAY
+        elif x == "show rules":
+            display_rules(rule_commands)
+            return ASK_AGAIN
+        elif x == "show assignments":
+            self.display_assignments()
+            return ASK_AGAIN
+        elif x == "show notes":
+            self.display_notes()
+            return ASK_AGAIN
+        elif x == "show suggestions":
+            self.display_suggestions()
+            return ASK_AGAIN
+        elif x == "autoassign off":
+            self.set_autoassign(False)
+            return ASK_AGAIN
+        elif x == "autoassign on":
+            self.set_autoassign(True)
+            return REDISPLAY
+        elif x.startswith("assign"):
+            self.handle_assignment(x)
+            return REDISPLAY
+        elif x.startswith("unassign"):
+            self.handle_assignment(x)
+            return REDISPLAY
+        elif x.startswith("remove rule"):
+            r = parse_remove_rule(rule_commands, x)
+            if r == None:
+                continue # go to top of inner while loop and ask for input again
+            else:
+                if r in shift_person_rules:
+                    del shift_person_rules[r]
+                else:
+                    del person_person_rules[r]
+                print("Removing rule %s (%s)" %(r, rule_commands[r]))
+                del rule_commands[r]
+                break # go to top of outer while loop; recalculate and redisplay everything
+        elif x.startswith("show notes"):
+            possibilities_by_shift = get_possibilities_by_shift(data, shifts, other_assignments, assignments, shift_person_rules, person_person_rules)
+            args = get_args(x)
+            if len(args) == 3:
+                if is_person_argument(people, args[2]):
+                    display_notes(possibilities_by_shift, person=args[2])
+                else:
+                    print("Unrecognized person %s. Recognized people are : " %args[2], ", ".join(people))
+                    print("Could not parse input.")
+            else:
+                print("Incorrect number of arguments to 'show notes'. Expected 1, got %s : %s" %(len(args - 2), ", ".join(args[2:])))
+                print("Could not parse input.")
+            continue # go to top of inner while loop and ask for input again
+        elif x.startswith("exclude"):
+            args = get_args(x)
+            r = None
+            rule_name = "rule" + str(rule_counter)
+            if len(args) == 3 and is_person_argument(people, args[1]):
+                if is_person_argument(people, args[2]):
+                    r = parse_person_person_rule(data, x)
+                    if r != None:
+                        person_person_rules[rule_name] = r
+                else:
+                    r = parse_shift_person_rule(data, x) 
+                    if r != None:
+                        shift_person_rules[rule_name] = r
+                if r == None:
+                    print("Could not parse input.")
+                    continue # go to top of inner while loop and ask for input again
+            else:
+                print("Could not parse input.")
+                continue # go to top of inner while loop and ask for input again
+            rule_counter += 1
+            rule_commands[rule_name] = " ".join(args)
+            print("Adding rule %s (%s)" %(rule_name, rule_commands[rule_name]))
+            break # go to top of outer while loop; recalculate and redisplay everything
+        else:
+            print("Input not recognized.")
+            display_help(people, shifts)
+
+    # check that an input argument does in fact correspond to a person
+    def check_person_arg(x):
+        if x not in self.people:
+            raise InputError("Unrecognized person %s. Recognized people are : " %x, ", ".join(self.people))
+ 
+    # check that an input argument does in fact correspond to a person
+    # TODO: make sure exclude has a special thing saying other-shifts are not alloewd
+    def check_shift_arg(x):
+        if x == "other1" or x == "other2":
+            return
+        shift_names = [shift_name(s) for s in self.shifts] # XXX: for some reason map doesn't print the error message correctly?
+        if x not in shift_names:
+            raise InputError("Unrecognized shift %s. Recognized shifts are : %s" %(args[2], ", ".join(list(set(shift_names)))))
+
+    def set_autoassign(value):
+        new_status = "on" if value else "off" 
+        opposite_status = "off" if value else "on" 
+        if autoassign == value:
+            print("Well, autoassign is already %s, so...sure?" %new_status)
+        else:
+            print("Turning autoassignment %s. Write 'autoassign %s' to turn it back %s." %(new_status, opposite_status, opposite_status))
+            autoassign = value
+
+    # Expects: assign <person> {<shift>, other1, other2}
+    def handle_assignment(self, cmd):
+        person, shift = get_args(cmd, "assign", 2)
+        check_person_arg(person)
+        check_shift_arg(shift)
+        msg = "Assigning %s to shift %s" %(person, shift)
+        if shift == "other1":
+            self.other_assignments[WEEK1].append(person)
+            print(msg)
+            return
+        elif shift == "other2":
+            self.other_assignments[WEEK2].append(person)
+            print(msg)
+            return
+        else:
+            for s in self.shifts:
+                if shift_name(s) == shift and s not in self.assignments:
+                    self.assignments[s] = person
+                    print(msg)
+                    return
+        # if we get here, then no shifts were unclaimed
+        raise InputError("Could not assign shift; all shifts of type %s are taken. Did you type the correct week?" %args[2])
+
+    # Expects: unassign <person> {<shift>, other1, other2}
+    def handle_unassignment(self, cmd):
+        person, shift = get_args(cmd, "unassign", 2)
+        check_person_arg(person)
+        check_shift_arg(shift)
+        msg = "Unassigning %s from shift %s" %(person, shift)
+        if shift == "other1":
+            if person in self.other_assignments[WEEK1]:
+                self.other_assignments[WEEK1].remove(person) 
+                print(msg)
+                return
+        elif shift == "other2":
+            if person in self.other_assignments[WEEK2]:
+                self.other_assignments[WEEK2].remove(person) 
+                print(msg)
+                return
+        else:
+            for s in assignments:
+                if shift_name(s) == shift and assignments[s] == person:
+                    del assignments[s]
+                    print(msg)
+                    return
+        # if we get here, then the person was not assigned to that shift
+        raise InputError("Could not unassign %s from shift %s because they are not currently assigned to it." %(person, shift))
+        print("Error: %s is not currently assigned to shift %s." %(args[1], args[2]))
+
+    # Expects: remove rule <rule name>
+    def handle_remove_rule(self, cmd):
+        args = get_args(cmd, "remove rule", 1)
+        if len(args) != 3:
+            print("Unexpected number of arguments to 'remove rule'! Expected 1 argument but got %s : %s" %(len(args) - 2, ", ".join(args[2:])))
+            return None
+        if args[2] not in rule_commands:
+            print("Unrecognized rule name %s. Recognized rule names are: %s" %(args[2], ", ".join(rule_commands.keys())))
+            return None
+        return args[2]
+
+
 
 # assignments should be a dictionary from shift to person and signify that a person is assigned to that shift 
 # shift_person_rules should be a dictionary from a string (name of the rule) to a function from shift -> person -> bool (true if OK, false if this pairing is excluded)
@@ -478,57 +746,6 @@ def display_help(people, shifts):
 def get_args(cmd):
     return [a.strip() for a in (cmd.strip().split(" ")) if a.strip() != ""]
 
-def parse_assignment(shifts, assignments, people, cmd):
-    args = get_args(cmd)
-    if len(args) != 3:
-        print("Unexpected number of arguments to 'assign'! Expected 2 arguments but got %s : %s" %(len(args) - 1, ", ".join(args[1:])))
-        return None
-    if args[1] not in people:
-        print("Unrecognized person %s. Recognized people are : " %args[1], ", ".join(people))
-        return None
-    if args[2] == "other1" or args[2] == "other2":
-        return (args[2], args[1])
-    shift_names = [shift_name(s) for s in shifts] # XXX: for some reason map doesn't print the error message correctly?
-    if args[2] not in shift_names:
-        print("Unrecognized shift %s. Recognized shifts are : %s" %(args[2], ", ".join(list(set(shift_names)))))
-        return None
-    for s in shifts:
-        if shift_name(s) == args[2] and s not in assignments:
-            return (s, args[1])
-    print("Could not assign shift; either all shifts of type %s are taken or they do not exist." %args[2])
-
-def parse_unassignment(shifts, other_assignments, assignments, cmd):
-    args = get_args(cmd)
-    shift_names = map(shift_name, shifts)
-    if len(args) != 3:
-        print("Unexpected number of arguments to 'unassign'! Expected 2 arguments but got %s : %s" %(len(args) - 1, ", ".join(args[1:])))
-        return None
-    if args[2] == "other1":
-        if args[1] in other_assignments[WEEK1]:
-            return (args[2], args[1])
-    elif args[2] == "other2":
-        if args[1] in other_assignments[WEEK2]:
-            return (args[2], args[1])
-    elif args[2] in shift_names:
-        for s in assignments:
-            if shift_name(s) == args[2]:
-                if assignments[s] == args[1]:
-                    return (s, args[1])
-    else:
-        print("Unrecognized shift %s. Recognized shifts are : %s" %(args[2], ", ".join(list(set(shift_names)))))
-        return None
-    print("Error: %s is not currently assigned to shift %s." %(args[1], args[2]))
-
-def parse_remove_rule(rule_commands, cmd):
-    args = get_args(cmd)
-    if len(args) != 3:
-        print("Unexpected number of arguments to 'remove rule'! Expected 1 argument but got %s : %s" %(len(args) - 2, ", ".join(args[2:])))
-        return None
-    if args[2] not in rule_commands:
-        print("Unrecognized rule name %s. Recognized rule names are: %s" %(args[2], ", ".join(rule_commands.keys())))
-        return None
-    return args[2]
-
 def parse_person_person_rule(data, cmd):
     args = get_args(cmd)
     if len(args) != 3:
@@ -598,146 +815,6 @@ def display_welcome():
     print(" - To show all possible commands, type 'help'") # this tip is separate so it doesn't show up in the help message, that would be dumb
     print("")
 
-def do_schedule(data):
-    shifts = generate_shifts()
-    people = list(data.keys())
-    shift_person_rules = {}
-    person_person_rules = {}
-    rule_commands = {}
-    rule_counter = 0
-    other_assignments = {week : [] for week in [WEEK1, WEEK2]}
-    assignments = {}
-    autoassign = True
-    is_first_run = True
-
-    while True:
-        assignments = step_and_display(data, shifts, other_assignments, assignments, shift_person_rules, person_person_rules, autoassign=autoassign)
-        if is_first_run:
-            display_welcome()
-            is_first_run = False
-        if is_complete(shifts, assignments):
-            print("ALL SHIFTS ASSIGNED!")
-            display_unassigned_people(data, other_assignments, assignments)
-            x = input("Type 'exit' to end the program; type anything else to continue: ")
-            x = x.strip()
-            if x == "exit":
-                break
-        while True:
-            x = input("Enter your move or type 'help' for options: ")
-            x = x.strip().lower()
-            if x == "exit":
-                return None
-            if x == "help":
-                display_help(people, shifts)
-                continue # go to top of inner while loop and ask for input again
-            elif x == "show status":
-                break # go to top of outer while loop and redisplay everything
-            elif x == "show rules":
-                display_rules(rule_commands)
-                continue # go to top of inner while loop and ask for input again
-            elif x == "show assignments":
-                display_assignments(shifts, assignments)
-                continue # go to top of inner while loop and ask for input again
-            elif x == "show notes":
-                possibilities_by_shift = get_possibilities_by_shift(data, shifts, other_assignments, assignments, shift_person_rules, person_person_rules)
-                display_notes(possibilities_by_shift)
-                continue # go to top of inner while loop and ask for input again
-            elif x == "show suggestions":
-                possibilities_by_shift = get_possibilities_by_shift(data, shifts, other_assignments, assignments, shift_person_rules, person_person_rules)
-                display_suggestions(get_suggestions(data, shifts, other_assignments, assignments, possibilities_by_shift))
-                continue # go to top of inner while loop and ask for input again
-            elif x == "autoassign off":
-                if not autoassign:
-                    print("Well, autoassign is already off, so sure?")
-                else:
-                    print("Turning off autoassignment. Write 'autoassign on' to turn it back on.")
-                    autoassign = False
-                continue # go to top of inner while loop and ask for input again
-            elif x == "autoassign on":
-                if autoassign:
-                    print("Well, autoassign is already on, so sure?")
-                else:
-                    print("Turning on autoassignment. Write 'autoassign off' to turn it back off.")
-                    autoassign = True
-                    break # go to top of outer while loop; recalculate and redisplay everything
-            elif x.startswith("assign"):
-                a = parse_assignment(shifts, assignments, data.keys(), x)
-                if a == None:
-                    print("Could not parse input.")
-                    continue # go to top of inner while loop and ask for input again
-                else:
-                    if a[0] == "other1":
-                        other_assignments[WEEK1].append(a[1])
-                    elif a[0] == "other2":
-                        other_assignments[WEEK2].append(a[1])
-                    else:
-                        assignments[a[0]] = a[1]
-                    print("Assigning %s to shift %s" %(a[1], a[0]))
-                    break # go to top of outer while loop; recalculate and redisplay everything
-            elif x.startswith("unassign"):
-                s = parse_unassignment(shifts, other_assignments, assignments, x)
-                if s == None:
-                    print("Could not parse input.")
-                    continue # go to top of inner while loop and ask for input again
-                elif s[0] == "other1":
-                    other_assignments[WEEK1].remove(s[1])
-                elif s[0] == "other2":
-                    other_assignments[WEEK2].remove(s[1])
-                else:
-                    del assignments[s[0]]
-                print("Unassigning shift %s" %s[0])
-                break # go to top of outer while loop; recalculate and redisplay everything
-            elif x.startswith("remove rule"):
-                r = parse_remove_rule(rule_commands, x)
-                if r == None:
-                    continue # go to top of inner while loop and ask for input again
-                else:
-                    if r in shift_person_rules:
-                        del shift_person_rules[r]
-                    else:
-                        del person_person_rules[r]
-                    print("Removing rule %s (%s)" %(r, rule_commands[r]))
-                    del rule_commands[r]
-                    break # go to top of outer while loop; recalculate and redisplay everything
-            elif x.startswith("show notes"):
-                possibilities_by_shift = get_possibilities_by_shift(data, shifts, other_assignments, assignments, shift_person_rules, person_person_rules)
-                args = get_args(x)
-                if len(args) == 3:
-                    if is_person_argument(people, args[2]):
-                        display_notes(possibilities_by_shift, person=args[2])
-                    else:
-                        print("Unrecognized person %s. Recognized people are : " %args[2], ", ".join(people))
-                        print("Could not parse input.")
-                else:
-                    print("Incorrect number of arguments to 'show notes'. Expected 1, got %s : %s" %(len(args - 2), ", ".join(args[2:])))
-                    print("Could not parse input.")
-                continue # go to top of inner while loop and ask for input again
-            elif x.startswith("exclude"):
-                args = get_args(x)
-                r = None
-                rule_name = "rule" + str(rule_counter)
-                if len(args) == 3 and is_person_argument(people, args[1]):
-                    if is_person_argument(people, args[2]):
-                        r = parse_person_person_rule(data, x)
-                        if r != None:
-                            person_person_rules[rule_name] = r
-                    else:
-                        r = parse_shift_person_rule(data, x) 
-                        if r != None:
-                            shift_person_rules[rule_name] = r
-                    if r == None:
-                        print("Could not parse input.")
-                        continue # go to top of inner while loop and ask for input again
-                else:
-                    print("Could not parse input.")
-                    continue # go to top of inner while loop and ask for input again
-                rule_counter += 1
-                rule_commands[rule_name] = " ".join(args)
-                print("Adding rule %s (%s)" %(rule_name, rule_commands[rule_name]))
-                break # go to top of outer while loop; recalculate and redisplay everything
-            else:
-                print("Input not recognized.")
-                display_help(people, shifts)
 
 def get_answer(data, name, shift):
     relevant_responses = [data[name][shift.time]]
