@@ -131,8 +131,8 @@ def generate_shifts():
                     shifts.append(Shift(t, day, week))
     return shifts
 
-def get_input(self, prompt="Enter your move or type 'help' for options: "):
-    x = input(prompt).strip().lower()
+def get_input(prompt="Enter your move or type 'help' for options: "):
+    return input(prompt).strip().lower()
 
 def get_args(input_text, lead_words, nargs):
     args = [a.strip() for a in input_text.split(" ") if a.strip() != ""][ len(lead_words.split(" ")):]
@@ -152,12 +152,15 @@ def make_note(name, shift, maybe_code):
         print("Unexpected Error: Unrecognized maybe-code %s" %maybe_code)
     return note
 
+def shift_name(shift):
+    return str(shift)
+
 class Scheduler:
     def __init__(self, data):
         self.data = data
         self.shifts = generate_shifts()
         self.people = list(data.keys())
-        self.shift_person_rules = {}  # dictionary mapping rule name (string) to a function with type shift -> person -> bool (true if OK, false if this pairing is excluded)
+        self.shift_person_rules = {}  # dictionary mapping rule name (string) to a function with type person -> shift -> bool (true if OK, false if this pairing is excluded)
         self.person_person_rules = {} # dictionary mapping rule name (string) to a function with type person -> person -> bool (true if OK, false if this pairing is excluded)
         self.rule_commands = {}
         self.rule_counter = 0
@@ -167,7 +170,7 @@ class Scheduler:
 
     def run(self):
         self.step_and_display()
-        self.show_welcome()
+        self.display_welcome()
         while True:
             cmd = get_input()
             if cmd == "exit":
@@ -181,7 +184,7 @@ class Scheduler:
                     if cmd == "exit":
                         return
     
-    def is_complete():
+    def is_complete(self):
         return all([s in self.assignments for s in self.shifts])
 
     def get_answer(self, name, shift):
@@ -219,13 +222,13 @@ class Scheduler:
                 remaining_shifts[p] -= 1
         return remaining_shifts
 
-    def get_warnings():
+    def get_warnings(self):
         # TODO: warn when a rule is violated 
         possibilities_by_shift = self.get_possibilities_by_shift()
         remaining_shifts = self.get_remaining_shifts()
         has_shift_for_week = { week : {p : False for p in self.people} for week in [WEEK1, WEEK2] }
         warnings = []
-        for s, p in assignments.items():
+        for s, p in self.assignments.items():
             # warn if someone is doing multiple shifts in the same week
             if has_shift_for_week[s.week][p]:
                 warnings.append("%p has multiple shifts in the same week (week %s)" %(p, s.week))
@@ -240,7 +243,7 @@ class Scheduler:
                 warnings.append("%s is assigned to shift %s even though they said no to cooking" %(p, s))
             if self.data[p][CLEAN] == NO and not s.is_cooking:
                 warnings.append("%s is assigned to shift %s even though they said no to cleaning" %(p, s))
-            if self.data[p][BIGCOOK] == NO and not s.is_big_cooking:
+            if self.data[p][BIGCOOK] == NO and s.is_big_cooking:
                 warnings.append("%s is assigned to shift %s even though they said no to big cooking" %(p, s))
         # warn if no one is available for a shift
         for s, possibilities in possibilities_by_shift.items():
@@ -262,14 +265,14 @@ class Scheduler:
         possibilities_by_shift = self.get_possibilities_by_shift()
         shifts_by_people = self.get_shifts_by_people(possibilities_by_shift)
         remaining_shifts = self.get_remaining_shifts()
-        available_people = list(filter(lambda p : remaining_shifts[p] > 0, people))
+        available_people = list(filter(lambda p : remaining_shifts[p] > 0, self.people))
         suggestions = [] 
         # suggest pairing people who want to work together
         for p1 in available_people:
             for s1 in shifts_by_people[p1]:
                 for s2 in self.assignments:
                     if self.assignments[s2] in self.data[p1][PAIR] and Shift.paired(s1, s2):
-                        justification = "so %s and %s can work together as requested by %s" %(p1, assignments[s2], p1)
+                        justification = "so %s and %s can work together as requested by %s" %(p1, self.assignments[s2], p1)
                         if p1 in self.data[assignments[s2]][PAIR]:
                             justification += " and %s both" %assignments[s2]
                         suggestions.append(("assign %s %s" %(p1, s1), justification))
@@ -285,7 +288,7 @@ class Scheduler:
                     suggestions.append(("assign %s %s" %(p, s), "because new people tend to be far happier (and less likely to drop) on cooking shifts than cleaning ones"))
         # if there's only one person left without a 'maybe' answer on a particular shift, suggest them
         for s in possibilities_by_shift:
-            if s in assignments:
+            if s in self.assignments:
                 continue
             yes_people = list(filter(lambda x : len(x[1]) == 0, possibilities_by_shift[s]))
             if len(yes_people) == 1:
@@ -300,15 +303,15 @@ class Scheduler:
 
     def get_possibilities_by_shift(self):
         possibilities_by_shift = { s : [] for s in self.shifts}
-        has_shift_for_week = { week : {p : False for p in people} for week in [WEEK1, WEEK2] }
+        has_shift_for_week = { week : {p : False for p in self.people} for week in [WEEK1, WEEK2] }
         remaining_shifts = self.get_remaining_shifts() # remaining num. of shifts per person
         unassigned_shifts = [s for s in self.shifts if s not in self.assignments]
         # first do assignments
         for s, name in self.assignments.items():
             possibilities_by_shift[s] = [(name, [])]
             has_shift_for_week[s.week][name] = True
-        for week in other_assignments:
-            for name in other_assignments[week]:
+        for week in self.other_assignments:
+            for name in self.other_assignments[week]:
                 has_shift_for_week[week][name] = True
         # next, aggregate other possibilities
         for s in unassigned_shifts:
@@ -318,11 +321,11 @@ class Scheduler:
                 if self.get_answer(p, s) != NO:
                     possibilities_by_shift[s].append((p, self.get_notes(p, s)))
         # apply rules
-        for rule_okay in self.shift_person_rules.values():
+        for r, rule_okay in self.shift_person_rules.items():
             for s in self.shifts:
-                possibilities_by_shift[s] = [(p, notes) for p, notes in possibilities_by_shift[s] if rule_okay(s, p)]
+                possibilities_by_shift[s] = [(p, notes) for p, notes in possibilities_by_shift[s] if rule_okay(p, s)]
         for rule_okay in self.person_person_rules.values():
-            for s1 in assignments:
+            for s1 in self.assignments:
                 p1 = possibilities_by_shift[s1][0][0]
                 for s2 in unassigned_shifts:
                     if Shift.paired(s1, s2):
@@ -348,10 +351,10 @@ class Scheduler:
             if len(options) == 2 and not s.is_cooking: # don't autoassign cooking shifts because designating the big cook is kind of an important choice
                 for s2 in self.shifts:
                     if Shift.paired(s, s2) and len(possibilities_by_shift[s2]) == 2:
-                        if all(lambda p : p in possibilities_by_shift[s2], options) and all(lambda p : p in options, possibilities_by_shift[s2]):
+                        if all(map(lambda p : p in possibilities_by_shift[s2], options)) and all(map(lambda p : p in options, possibilities_by_shift[s2])):
                             # the 2 possibilities for each shift are the same 2 people; auto-assign them
                             # it is sufficient to auto-assign one, the next round will catch the next one
-                            print("Auto-assigning %s to shift %s because they and %s are the only remaining possibilities for two simultaneous shifts" %(p1, s, p2))
+                            print("Auto-assigning %s to shift %s because they and %s are the only remaining possibilities for two simultaneous shifts" %(options[0][0], s, options[1][0]))
                             return (s, options[0][0])
 
     def step_and_display(self):
@@ -374,12 +377,12 @@ class Scheduler:
 
     def handle_input_cases(self, x):
         if x == "help":
-            display_help(people, shifts)
+            self.display_help()
             return ASK_AGAIN
         elif x == "show status":
             return REDISPLAY
         elif x == "show rules":
-            display_rules(rule_commands)
+            self.display_rules()
             return ASK_AGAIN
         elif x == "show assignments":
             self.display_assignments()
@@ -394,13 +397,14 @@ class Scheduler:
             self.set_autoassign(False)
             return ASK_AGAIN
         elif x == "autoassign on":
+            action = ASK_AGAIN if self.autoassign else REDISPLAY # only redisplay if autoassign was previously off
             self.set_autoassign(True)
-            return REDISPLAY
+            return action 
         elif x.startswith("assign"):
             self.handle_assignment(x)
             return REDISPLAY
         elif x.startswith("unassign"):
-            self.handle_assignment(x)
+            self.handle_unassignment(x)
             return REDISPLAY
         elif x.startswith("remove rule"):
             self.handle_remove_rule(x)
@@ -417,34 +421,34 @@ class Scheduler:
             return ASK_AGAIN
 
     # check that an input argument does in fact correspond to a person
-    def check_person_arg(x, new_ok=False):
+    def check_person_arg(self, x, new_ok=False):
         if new_ok and x == "new":
             return
         if x not in self.people:
             raise InputError("Unrecognized person %s. Recognized people are : " %x, ", ".join(self.people))
  
     # check that an input argument does in fact correspond to a person
-    def check_shift_arg(x):
+    def check_shift_arg(self, x):
         if x == "other1" or x == "other2":
             return
         shift_names = [shift_name(s) for s in self.shifts] # XXX: for some reason map doesn't print the error message correctly?
         if x not in shift_names:
             raise InputError("Unrecognized shift %s. Recognized shifts are : %s" %(args[2], ", ".join(list(set(shift_names)))))
     
-    def set_autoassign(value):
+    def set_autoassign(self, value):
         new_status = "on" if value else "off" 
         opposite_status = "off" if value else "on" 
-        if autoassign == value:
+        if self.autoassign == value:
             print("Well, autoassign is already %s, so...sure?" %new_status)
         else:
             print("Turning autoassignment %s. Write 'autoassign %s' to turn it back %s." %(new_status, opposite_status, opposite_status))
-            autoassign = value
+            self.autoassign = value
 
     # Expects: assign <person> {<shift>, other1, other2}
     def handle_assignment(self, cmd):
         person, shift = get_args(cmd, "assign", 2)
-        check_person_arg(person)
-        check_shift_arg(shift)
+        self.check_person_arg(person)
+        self.check_shift_arg(shift)
         msg = "Assigning %s to shift %s" %(person, shift)
         if shift == "other1":
             self.other_assignments[WEEK1].append(person)
@@ -461,13 +465,13 @@ class Scheduler:
                     print(msg)
                     return
         # if we get here, then no shifts were unclaimed
-        raise InputError("Could not assign shift; all shifts of type %s are taken. Did you type the correct week?" %args[2])
+        raise InputError("Could not assign shift; all shifts of type %s are taken. Did you type the correct week?" %shift)
 
     # Expects: unassign <person> {<shift>, other1, other2}
     def handle_unassignment(self, cmd):
         person, shift = get_args(cmd, "unassign", 2)
-        check_person_arg(person)
-        check_shift_arg(shift)
+        self.check_person_arg(person)
+        self.check_shift_arg(shift)
         msg = "Unassigning %s from shift %s" %(person, shift)
         if shift == "other1":
             if person in self.other_assignments[WEEK1]:
@@ -480,9 +484,9 @@ class Scheduler:
                 print(msg)
                 return
         else:
-            for s in assignments:
-                if shift_name(s) == shift and assignments[s] == person:
-                    del assignments[s]
+            for s in self.assignments:
+                if shift_name(s) == shift and self.assignments[s] == person:
+                    del self.assignments[s]
                     print(msg)
                     return
         # if we get here, then the person was not assigned to that shift
@@ -493,14 +497,14 @@ class Scheduler:
         r = get_args(cmd, "remove rule", 1)
         if r not in self.rule_commands:
             raise InputError("Unrecognized rule name %s. Recognized rule names are: %s" %(r, ", ".join(self.rule_commands.keys())))
-        if r in shift_person_rules:
+        if r in self.shift_person_rules:
             del self.shift_person_rules[r]
         else:
             del self.person_person_rules[r]
         print("Removing rule %s (%s)" %(r, self.rule_commands[r]))
         del rule_commands[r]
 
-    def handle_exclude_person_person(rule_name, p1, p2):
+    def handle_exclude_person_person(self, rule_name, p1, p2):
         if p1 == p2:
             raise InputError("You cannot exclude someone from cooking with themselves. What's your problem?")
         cond1 = lambda p : p == p1
@@ -511,7 +515,7 @@ class Scheduler:
             cond2 = lambda p : self.data[p][NEW]
         self.person_person_rules[rule_name] = lambda px, py : not ((cond1(px) and cond2(py)) or (cond2(px) and cond1(py)))
 
-    def handle_exclude_person_shift(rule_name, p1, x):
+    def handle_exclude_person_shift(self, rule_name, p1, x):
         cond1 = lambda p : p == p1
         cond2 = lambda s : shift_name(s) == x
         if p1 == "new":
@@ -523,28 +527,28 @@ class Scheduler:
     # Expects: exclude {<person>, new} {<shift>, <person>, new}
     def handle_exclude(self, cmd):
         p1, x = get_args(cmd, "exclude", 2)
-        rule_name = "rule" + str(rule_counter)
-        check_person_arg(p1, new_ok=True)
+        rule_name = "rule" + str(self.rule_counter)
+        self.check_person_arg(p1, new_ok=True)
         shift_names = [shift_name(s) for s in self.shifts]
         if x in shift_names or x in SHIFT_TYPES:
-            handle_exclude_person_shift(rule_name, p1, x)
+            self.handle_exclude_person_shift(rule_name, p1, x)
         elif x == "other1" or x == "other2":
             raise InputError("'other' shifts cannot be used in 'exclude', and there's no reason to do it anyway, so stoppit")
         else:
-            check_person_arg(x, new_ok=True)
-            handle_exclude_person_person(rule_name, p1, x)
-        rule_counter += 1
-        rule_commands[rule_name] = cmd
+            self.check_person_arg(x, new_ok=True)
+            self.handle_exclude_person_person(rule_name, p1, x)
+        self.rule_counter += 1
+        self.rule_commands[rule_name] = cmd
         print("Adding rule %s (%s)" %(rule_name, cmd))
 
     # N.B. this function is not responsible for the plain 'show notes' version of the command
     # Expects: show notes <person>
     def handle_show_notes(self, cmd):
         p = get_args(cmd, "show notes", 1)
-        check_person_arg(p)
+        self.check_person_arg(p)
         display_notes(p)
 
-    def display_notes(person=None):
+    def display_notes(self,person=None):
         notes = []
         for s, options in self.get_possibilities_by_shift().items():
             for p, maybe_notes in options:
@@ -552,7 +556,7 @@ class Scheduler:
                     for n in maybe_notes:
                         notes.append(make_note(p, s, n))
         print("Notes:")
-        notes = list(set(self.get_notes()))
+        notes = list(set(notes))
         notes.sort()
         for n in notes:
             print("\t- " + n)
@@ -563,7 +567,7 @@ class Scheduler:
         print(" - The 'other' category is for miscellaneous shifts, like tiny cook, fridge ninja, or brunch cook")
         print(" - Type 'show suggestions' to get suggestions for next moves")
 
-    def display_commands(self)
+    def display_commands(self):
         print("Possible commands (everything is case-insensitive):")
         print("\texit\t\t- close program")
         print("\tshow status\t\t- display the current state of assignments/possibilities")
@@ -624,12 +628,13 @@ class Scheduler:
 
     def display_assignments(self):
         for s in self.assignments:
-            print("%s : %s" %(s, assignments[s]))
-        if len(assignments) == 0:
+            print("%s : %s" %(s, self.assignments[s]))
+        if len(self.assignments) == 0:
             print("No assignments yet!")
 
-    def display_state():
+    def display_state(self):
         table = {s : [] for s in self.shifts}
+        possibilities_by_shift = self.get_possibilities_by_shift()
         week = None
         day = None
         for s in possibilities_by_shift:
@@ -638,12 +643,12 @@ class Scheduler:
                 for n in maybe_notes:
                     display_p = "(" + display_p + ")"
                 table[s].append(display_p)
-        for s in shifts:
+        for s in self.shifts:
             if s.week != week:
                 print("")
                 print("Week %s" %s.week)
                 print("======")
-                print("other%s: %s" %(s.week, ", ".join(other_assignments[s.week])))
+                print("other%s: %s" %(s.week, ", ".join(self.other_assignments[s.week])))
                 print("")
             elif s.day != day:
                 print("")
@@ -651,7 +656,7 @@ class Scheduler:
             week = s.week
             print("%s : %s" %(s, "; ".join(sorted(table[s], reverse=True)))) 
         print("")
-        for warning in warnings:
+        for warning in self.get_warnings():
             print("WARNING: %s" %warning)
 
 def clean_data(data):
@@ -715,7 +720,13 @@ if __name__ == "__main__":
 
     dataf = open(sys.argv[1])
     data = parse_data(dataf)
-    do_schedule(data)
+    Scheduler(data).run()
     # TODO: save/load functionality
     # TODO: add heuristic/brute force search at some point?
+    # when you unassign someone for a shift, but they were the last person available and said all-yes, they still show up as if they are assigned because the format is ambiguous here. Is this an issue? 
 
+# Questions
+# What would be a good output format? Assignments or schedule or csv?
+# save/load functionality?
+
+# TODO: right now, making a rule unassigns people. We don't want that.
