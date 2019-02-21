@@ -323,7 +323,7 @@ class Scheduler:
         # apply rules
         for r, rule_okay in self.shift_person_rules.items():
             for s in self.shifts:
-                possibilities_by_shift[s] = [(p, notes) for p, notes in possibilities_by_shift[s] if rule_okay(p, s)]
+                possibilities_by_shift[s] = [(p, notes) for p, notes in possibilities_by_shift[s] if rule_okay(p, s) or s in self.assignments]
         for rule_okay in self.person_person_rules.values():
             for s1 in self.assignments:
                 p1 = possibilities_by_shift[s1][0][0]
@@ -494,7 +494,7 @@ class Scheduler:
 
     # Expects: remove rule <rule name>
     def handle_remove_rule(self, cmd):
-        r = get_args(cmd, "remove rule", 1)
+        r = get_args(cmd, "remove rule", 1)[0]
         if r not in self.rule_commands:
             raise InputError("Unrecognized rule name %s. Recognized rule names are: %s" %(r, ", ".join(self.rule_commands.keys())))
         if r in self.shift_person_rules:
@@ -502,10 +502,10 @@ class Scheduler:
         else:
             del self.person_person_rules[r]
         print("Removing rule %s (%s)" %(r, self.rule_commands[r]))
-        del rule_commands[r]
+        del self.rule_commands[r]
 
     def handle_exclude_person_person(self, rule_name, p1, p2):
-        if p1 == p2:
+        if p1 == p2 and p1 != "new":
             raise InputError("You cannot exclude someone from cooking with themselves. What's your problem?")
         cond1 = lambda p : p == p1
         cond2 = lambda p : p == p2
