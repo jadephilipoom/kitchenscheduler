@@ -88,8 +88,6 @@ class InputError(Exception):
     pass
 
 class Shift:
-    id_counter = 0
-    
     def paired(s1, s2):
         return (s1 != s2 and s1.day == s2.day and s1.week == s2.week and s1.is_cooking == s2.is_cooking)
     
@@ -97,9 +95,6 @@ class Shift:
         self.type = shift_type
         self.day = day
         self.week = week
-        # TODO: try removing the id thing
-        self.id = Shift.id_counter
-        Shift.id_counter += 1
         
         self.is_cooking = False 
         self.is_big_cooking = False 
@@ -113,11 +108,14 @@ class Shift:
             sys.exit()
 
         self.time = ("Cook" if self.is_cooking else "Clean") + day
+    
+    def category(self):
+        if self.is_big_cooking:
+            return "big" + self.time.lower()
+        return self.time.lower()
 
     def __str__(self):
-        if self.is_big_cooking:
-            return ("big" + self.time.lower() + str(self.week))
-        return self.time.lower() + str(self.week)
+        return self.category() + str(self.week)
 
 def generate_shifts():
     shifts = []
@@ -154,6 +152,7 @@ def make_note(name, shift, maybe_code):
 
 def shift_name(shift):
     return str(shift)
+
 
 class Scheduler:
     def __init__(self, data):
@@ -231,11 +230,11 @@ class Scheduler:
         for s, p in self.assignments.items():
             # warn if someone is doing multiple shifts in the same week
             if has_shift_for_week[s.week][p]:
-                warnings.append("%p has multiple shifts in the same week (week %s)" %(p, s.week))
+                warnings.append("%s has multiple shifts in the same week (week %s)" %(p, s.week))
             has_shift_for_week[s.week][p] = True
             # warn if someone is doing too many shifts
             if remaining_shifts[p] < 0:
-                warnings.append("%p is doing too many shifts" %p)
+                warnings.append("%s is doing too many shifts" %p)
             # warn if someone is assigned to a thing they said no to
             if self.data[p][s.time] == NO:
                 warnings.append("%s is assigned to shift %s even though they said they are unavailable" %(p, s))
@@ -425,15 +424,15 @@ class Scheduler:
         if new_ok and x == "new":
             return
         if x not in self.people:
-            raise InputError("Unrecognized person %s. Recognized people are : " %x, ", ".join(self.people))
+            raise InputError("Unrecognized person %s. Recognized people are : " %(x, ", ".join(self.people)))
  
-    # check that an input argument does in fact correspond to a person
+    # check that an input argument does in fact correspond to a shift
     def check_shift_arg(self, x):
-        if x == "other1" or x == "other2":
+        if x == "other":
             return
-        shift_names = [shift_name(s) for s in self.shifts] # XXX: for some reason map doesn't print the error message correctly?
+        shift_names = [shift_name(s) for s in self.shifts]
         if x not in shift_names:
-            raise InputError("Unrecognized shift %s. Recognized shifts are : %s" %(args[2], ", ".join(list(set(shift_names)))))
+            raise InputError("Unrecognized shift %s. Recognized shifts are : %s" %(x, ", ".join(list(set(shift_names)))))
     
     def set_autoassign(self, value):
         new_status = "on" if value else "off" 
@@ -444,10 +443,15 @@ class Scheduler:
             print("Turning autoassignment %s. Write 'autoassign %s' to turn it back %s." %(new_status, opposite_status, opposite_status))
             self.autoassign = value
 
-    # Expects: assign <person> {<shift>, other1, other2}
+    # Expects: assign <person> {<shift>, other}
     def handle_assignment(self, cmd):
         person, shift = get_args(cmd, "assign", 2)
         self.check_person_arg(person)
+        # check for case in which we assign someone to e.g. 'bigcookmon' and they get assigned to both weeks at once; treat as though it's two commands
+        if not (shift.endswith("1") or shift.endswith("2")):
+            self.handle_assignment(" ".join(["assign", person, shift + "1"]))
+            self.handle_assignment(" ".join(["assign", person, shift + "2"]))
+            return
         self.check_shift_arg(shift)
         msg = "Assigning %s to shift %s" %(person, shift)
         if shift == "other1":
@@ -467,10 +471,15 @@ class Scheduler:
         # if we get here, then no shifts were unclaimed
         raise InputError("Could not assign shift; all shifts of type %s are taken. Did you type the correct week?" %shift)
 
-    # Expects: unassign <person> {<shift>, other1, other2}
+    # Expects: unassign <person> {<shift>, other}
     def handle_unassignment(self, cmd):
         person, shift = get_args(cmd, "unassign", 2)
         self.check_person_arg(person)
+        # check for case in which we unassign someone from e.g. 'bigcookmon' and they get unassigned from both weeks at once; treat as though it's two commands
+        if not (shift.endswith("1") or shift.endswith("2")):
+            self.handle_unassignment(" ".join(["unassign", person, shift + "1"]))
+            self.handle_unassignment(" ".join(["unassign", person, shift + "2"]))
+            return
         self.check_shift_arg(shift)
         msg = "Unassigning %s from shift %s" %(person, shift)
         if shift == "other1":
@@ -478,7 +487,7 @@ class Scheduler:
                 self.other_assignments[WEEK1].remove(person) 
                 print(msg)
                 return
-        elif shift == "other2":
+        if shift == "other2":
             if person in self.other_assignments[WEEK2]:
                 self.other_assignments[WEEK2].remove(person) 
                 print(msg)
@@ -532,7 +541,7 @@ class Scheduler:
         shift_names = [shift_name(s) for s in self.shifts]
         if x in shift_names or x in SHIFT_TYPES:
             self.handle_exclude_person_shift(rule_name, p1, x)
-        elif x == "other1" or x == "other2":
+        elif x == "other":
             raise InputError("'other' shifts cannot be used in 'exclude', and there's no reason to do it anyway, so stoppit")
         else:
             self.check_person_arg(x, new_ok=True)
@@ -633,16 +642,23 @@ class Scheduler:
             print("No assignments yet!")
 
     def display_state(self):
-        table = {s : [] for s in self.shifts}
+        table = {shift_name(s) : [] for s in self.shifts}
         possibilities_by_shift = self.get_possibilities_by_shift()
-        week = None
-        day = None
+        week, day = None, None
         for s in possibilities_by_shift:
-            for p, maybe_notes in possibilities_by_shift[s]:
-                display_p = p
-                for n in maybe_notes:
-                    display_p = "(" + display_p + ")"
-                table[s].append(display_p)
+            if s in self.assignments:
+                table[shift_name(s)].append("[" + possibilities_by_shift[s][0][0] + "]")
+            else:
+                for p, maybe_notes in possibilities_by_shift[s]:
+                    display_p = p
+                    for n in maybe_notes:
+                        display_p = "(" + display_p + ")"
+                    table[shift_name(s)].append(display_p)
+
+        for s in table:
+            table[shift_name(s)] = list(set(table[shift_name(s)])) # remove duplicate entries for cleaning shifts
+
+        already_printed = []
         for s in self.shifts:
             if s.week != week:
                 print("")
@@ -654,7 +670,9 @@ class Scheduler:
                 print("")
             day = s.day
             week = s.week
-            print("%s : %s" %(s, "; ".join(sorted(table[s], reverse=True)))) 
+            if shift_name(s) not in already_printed: # avoids duplicating the cleaning shifts
+                already_printed.append(shift_name(s))
+                print("%s (%s) : %s" %(s, len(table[shift_name(s)]), "; ".join(sorted(table[shift_name(s)])))) 
         print("")
         for warning in self.get_warnings():
             print("WARNING: %s" %warning)
