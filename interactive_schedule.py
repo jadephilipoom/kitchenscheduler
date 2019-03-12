@@ -178,6 +178,10 @@ def is_in_week(s, week):
 # combinations() calls; the maxn parameter is calibrated to try to avoid
 # performance problems.
 def detect_clusters(options_by_name, names, slots_per_option, slots_per_name):
+
+    options_by_name = {p : set(options) for p, options in options_by_name.items()}
+    names = {p for p in names if slots_per_name[p] > 0}
+
     # choose the maxn parameter to prevent too much computation
     if len(names) < 15:
         maxn = 7
@@ -188,8 +192,15 @@ def detect_clusters(options_by_name, names, slots_per_option, slots_per_name):
     else:
         maxn = 3
 
-    options_by_name = {p : set(options) for p, options in options_by_name.items()}
-    names = {p for p in names if len(options_by_name[p]) <= maxn and slots_per_name[p] > 0}
+    # exclude people who have so many options that they'll never be in a cluster, even one of the maximum size
+    max_slots_per_name = max(slots_per_name.values())
+    names = {p for p in names if sum(map(lambda x : slots_per_option[x], options_by_name[p])) <= max_slots_per_name*maxn }
+
+    print("\nmaxn", maxn)
+    for p in names:
+        str_options = list(map(lambda x : "%s (%s)" %(x, slots_per_option[x]), options_by_name[p]))
+        print("%s (%s) : %s" %(p, slots_per_name[p], str_options))
+
     clusters = []
     for n in range(2, maxn+1):
         possible_clusters = {frozenset(comb) : set() for comb in combinations(names, n)}
@@ -204,6 +215,13 @@ def detect_clusters(options_by_name, names, slots_per_option, slots_per_name):
                 clusters.append((members, S))
                 to_remove.update(members)
         names = names - to_remove
+
+    # if multiple clusters actually correspond to the same shifts, just group them together
+    by_shift = {frozenset(S) : set() for members, S in clusters}
+    for members, S in clusters:
+        by_shift[frozenset(S)].update(members)
+    clusters = [(members, S) for S, members in by_shift.items()]
+
     return clusters
 
 # Note: although 'other' is treated special internally, it should be treated as just another shift name in the API
@@ -238,7 +256,9 @@ class Schedule:
     
     def has_shift_for_week(self, p, week):
         for s in self.get_current_shifts(p):
-            if s.week == week:
+            if isinstance(s, Shift) and s.week == week:
+                return True
+            elif s == "other" + str(week):
                 return True
         return False
     
@@ -428,14 +448,19 @@ class Schedule:
             if len(possibilities) == 0:
                 warnings.append("No one is available for shift %s" %s)
 
-        # TODO: make slots_per_option with type string (shiftname) -> nat
-        # TODO: make possibilities_by_person that maps to strings
-        shifts_per_shift_name = {str(s): 0 for s in Schedule.shifts}
+        shifts_per_shift_time = {s.time: 0 for s in Schedule.shifts}
         for s in Schedule.shifts:
-            shifts_per_shift_name[str(s)] += 1
-        clusters = detect_clusters({p : list(map(str, options)) for p, options in possibilities_by_person.items()}, self.people, shifts_per_shift_name, remaining_shifts)
-        for people, shifts in clusters:
-            warnings.append("%s are only able to do the following shifts: %s. Assigning others to those shifts will make the schedule unsatisfiable, so it's highly recommended to assign these people first." %(", ".join(people), ", ".join(set(map(str, shifts)))))
+            if s not in self.assignments:
+                shifts_per_shift_time[s.time] += 1
+        clusters = detect_clusters({p : list(map(lambda s : s.time, options)) for p, options in possibilities_by_person.items()}, self.people, shifts_per_shift_time, remaining_shifts)
+        for people, shift_times in clusters:
+            shifts_possible = []
+            for t in shift_times:
+                shifts_possible.extend([s for s in Schedule.shifts if s.time == t and s not in self.assignments])
+            shifts_needed = sum(map(lambda p : remaining_shifts[p], people))
+            nshifts = len(set(shifts_possible))
+            shifts_possible = list(set(map(str, shifts_possible))) # unique names
+            warnings.append("%s, between them, need %s shifts but can only do %s shifts: %s. Assigning others to those shifts will make the schedule unsatisfiable, so it's highly recommended to assign these people first." %(", ".join(list(map(self.format_name, people))), shifts_needed, nshifts, ", ".join(shifts_possible)))
         
         warnings.sort()
         return list(set(warnings))
@@ -809,7 +834,8 @@ class Loop(cmd.Cmd):
     def get_args(self, cmd, arg_string):
         args = [a.strip().lower() for a in arg_string.split(" ") if a.strip() != ""]
         if cmd in self.nargs and len(args) not in self.nargs[cmd]:
-            print("Unexpected number of arguments to '%s'! Expected %s, got %s : %s" %(cmd, " or ".join(self.nargs[cmd]), len(args), ", ".join(args)))
+            print("Unexpected number of arguments to '%s'! Expected %s, got %s : %s" %(cmd, " or ".join(list(map(str, self.nargs[cmd]))), len(args), ", ".join(args)))
+            return None
         return args
 
     def check_person_arg(self, x, new_ok=False):
@@ -861,6 +887,9 @@ class Loop(cmd.Cmd):
 
     def do_load(self, arg):
         args = self.get_args("load", arg)
+        if args == None:
+            self.default("load " + arg)
+            return
         try:
             f = open(args[0], "r")
             for line in f:
@@ -881,6 +910,9 @@ class Loop(cmd.Cmd):
     
     def do_autoassign(self, arg):
         args = self.get_args("autoassign", arg) 
+        if args == None:
+            self.default("autoassign " + arg)
+            return
         if args[0] == "on":
             self.state.set_autoassign(True)
         elif args[0] == "off":
@@ -889,7 +921,11 @@ class Loop(cmd.Cmd):
             self.default("autoassign" + args)
     
     def do_assign(self, arg):
-        person, shift = self.get_args("assign", arg)
+        args = self.get_args("assign", arg)
+        if args == None:
+            self.default("assign " + arg)
+            return
+        person, shift = args
         if not self.check_person_arg(person): return
         # check for case in which we assign someone to e.g. 'bigcookmon' and they get assigned to both weeks at once; treat as though it's two commands
         if self.state.is_str(shift + "1"):
@@ -901,7 +937,11 @@ class Loop(cmd.Cmd):
         self.state.assign(person, shift)
 
     def do_unassign(self, arg):
-        person, shift = self.get_args("unassign", arg)
+        args = self.get_args("unassign", arg)
+        if args == None:
+            self.default("unassign " + arg)
+            return
+        person, shift = args
         if not self.check_person_arg(person): return
         if self.state.is_str(shift + "1"):
             self.do_unassign("%s %s" %(person, shift + "1"))
@@ -915,15 +955,20 @@ class Loop(cmd.Cmd):
         self.state.unassign(person, shift)
     
     def do_remove(self, arg):
-        rule, r = self.get_args("remove", arg)
-        if not rule == "rule":
+        args = self.get_args("remove", arg)
+        if args == None or not args[0] == "rule":
             self.default("remove " + arg)
             return
+        r = args[1]
         print("Removing rule %s (%s)" %(r, self.state.rule_commands[r]))
         self.state.remove_rule(r)
  
     def do_exclude(self, arg):
-        p1, x = self.get_args("exclude", arg)
+        args = self.get_args("exclude", arg)
+        if args == None:
+            self.default("exclude " + arg)
+            return
+        p1, x = args
         if not self.check_person_arg(p1, new_ok=True): return
         print("Adding rule %s (%s). Type 'show rules' to view all rules." %(self.state.next_rule_name(), " ".join(["exclude", p1, x])))
         if self.state.is_str(x) or x in SHIFT_TYPES: 
@@ -937,6 +982,9 @@ class Loop(cmd.Cmd):
 
     def do_show(self, arg):
         args = self.get_args("show", arg)
+        if args == None:
+            self.default("show " + arg)
+            return
         line = "show " + args[0]
         if len(args) == 1:
             cmd2 = args[0]
@@ -1221,3 +1269,5 @@ if __name__ == "__main__":
 # TODO: show pairing requests in 'show notes'
 # TODO: in stats, say how many extra shifts / how many shifts short
 # TODO: at the beginning, detect if there are not enough people to fill all cooking/cleaning shifts, and if there are not enough big cooks.
+# TODO: too many shifts warning might not be counting 'other'
+# TODO: currently people can be assigned to other multiple times
