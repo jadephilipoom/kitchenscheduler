@@ -1,4 +1,4 @@
-import sys, csv, cmd
+import sys, csv, cmd, os
 from itertools import combinations
 
 # Constant strings used to refer to questions and answers on the survey
@@ -196,10 +196,8 @@ def detect_clusters(options_by_name, names, slots_per_option, slots_per_name):
     max_slots_per_name = max(slots_per_name.values())
     names = {p for p in names if sum(map(lambda x : slots_per_option[x], options_by_name[p])) <= max_slots_per_name*maxn }
 
-    print("\nmaxn", maxn)
     for p in names:
         str_options = list(map(lambda x : "%s (%s)" %(x, slots_per_option[x]), options_by_name[p]))
-        print("%s (%s) : %s" %(p, slots_per_name[p], str_options))
 
     clusters = []
     for n in range(2, maxn+1):
@@ -298,6 +296,11 @@ class Schedule:
             for s in Schedule.shifts:
                 codes = get_notes(self.data, p, s)
                 notes.extend(map(lambda c : make_note(p, s, c), codes))
+            if self.data[p][NEW]:
+                notes.append("%s is new to mealplan" %p)
+            pair_requests = self.data[p][PAIR]
+            if len(pair_requests) != 0:
+                notes.append("%s asked to work with %s" %(p, ", ".join(pair_requests)))
         return list(set(notes))
 
     def get_answer(self, name, shift, maybe_is_no=False):
@@ -317,7 +320,6 @@ class Schedule:
                 return MAYBE
         return YES
 
-
     def set_autoassign(self, value):
         new_status = "on" if value else "off" 
         opposite_status = "off" if value else "on" 
@@ -329,6 +331,9 @@ class Schedule:
 
     def assign(self, person, shift):
         if shift == "other1" or shift == "other2":
+            if person in self.other_assignments[shift]:
+                print("%s is already assigned to %s" %(person, shift))
+                return
             self.other_assignments[shift].append(person)
             self.update()
             self.auto_assign()
@@ -688,10 +693,9 @@ class Schedule:
             self.update()
             new_assignment = self.auto_assign_one() 
 
+    def get_state_summary(self):
+        return (set(self.assignments), set(self.rule_commands.values()))
 
-
-# after changing the state:
-# repeat update-cache/auto-assign cycle
 
 class Loop(cmd.Cmd):
     prompt = "Enter your move (type '?' or 'help' for options): "
@@ -711,6 +715,7 @@ class Loop(cmd.Cmd):
     def __init__(self, data):
         super().__init__()
         self.state = Schedule(data)
+        self.prev_state_summary = self.state.get_state_summary()
     
     def tips():
         lines = []
@@ -758,6 +763,18 @@ class Loop(cmd.Cmd):
         lines.append("\tsave <file>\t\t- save current assignments and rules to a new file with the name <file> (fails if <file> exists)")
         lines.append("\texit\t\t- close program")
         return "\n".join(lines)
+
+    def complete_load(self, text, line, begidx, endidx):
+        cmd_size = len("load ") # index of end of command
+        if begidx == cmd_size:
+            dirname, filename = os.path.split(text)
+            if dirname == '':
+                # current directory
+                return [f for f in os.listdir() if f.startswith(filename)]
+            else:
+                return ["%s/%s" %(dirname, f) for f in os.listdir(dirname) if f.startswith(filename)]
+        else:
+            return [] # unexpected begin index; no completions
 
     def complete_show(self, text, line, begidx, endidx):
         cmd_size = len("show ") # index of end of command
@@ -823,9 +840,12 @@ class Loop(cmd.Cmd):
     def postcmd(self, stop, line):
         if self.state.is_complete():
             self.display_complete()
-            x = input("Type 'exit' to end the program; type anything else to continue: ")
-            if x == "exit":
-                return True
+        # display warnings if the state changed
+        summary = self.state.get_state_summary()
+        if summary != self.prev_state_summary:
+            self.display_warnings()
+            self.prev_state_summary = self.state.get_state_summary()
+
         return stop
 
     def emptyline(self):
@@ -896,17 +916,19 @@ class Loop(cmd.Cmd):
                 self.onecmd(line.strip("\n"))
             f.close()
             print("Successfully loaded %s." %args[0])
+            self.display_warnings()
         except IOError as e:
             print("Could not load file '%s'. Does the file exist?" %args[0])
 
     def do_save(self, arg):
         # save assignments and rules to a file
         args = self.get_args("save", arg)
+        if args == None:
+            self.default("save " + arg)
         if self.save(args[0]):
             print("Successfully saved. Use the command 'load %s' in any session to restore all current assignments and rules." %args[0])
         else:
             print("Could not open '%s'. Does a file with that name already exist?" %args[0])
-
     
     def do_autoassign(self, arg):
         args = self.get_args("autoassign", arg) 
@@ -1128,7 +1150,14 @@ class Loop(cmd.Cmd):
                 print("")
             week, day = s.week, s.day
             if str(s) not in already_printed:
-                print("%s : %s" %(s, "; ".join(table[str(s)]))) 
+                maybe_count = len(list(filter(lambda x:x.startswith("("), table[str(s)])))
+                assigned_count = len(list(filter(lambda x:x.startswith("["), table[str(s)])))
+                yes_count = len(table[str(s)]) - assigned_count - maybe_count
+                if yes_count == 0 and maybe_count == 0:
+                    count_str = '' # this shift is fully assigned; don't show the count
+                else:
+                    count_str = "(%s yes, %s maybe) " %(yes_count, maybe_count)
+                print("%s %s: %s" %(s, count_str, "; ".join(table[str(s)]))) 
                 already_printed.append(str(s))
         self.display_warnings()
 
@@ -1162,17 +1191,20 @@ def reformat_multiple_choice(data_rows):
 def clean_pairing_requests(data_rows):
     data_out = {}
     names = [parse_name(r[EMAIL]) for r in data_rows]
+    unrecognized_names = []
     for r in data_rows:
         requests = []
         for name in r[PAIR]:
             if name in names:
                 requests.append(name)
             else:
-                # TODO: strengthen this -- if unrecognized names are found, program should aggregate them all, print them, and exit, explaining that they need to be removed or replaced. 
-                print("WARNING: removing preference for %s to be paired with %s, since %s did not sign up. If this is another name for someone who *did* sign up, change it in the data file." %(parse_name(r[EMAIL]),name,name))
+                unrecognized_names.append(name)
+                #print("WARNING: removing preference for %s to be paired with %s, since %s did not sign up. If this is another name for someone who *did* sign up, change it in the data file." %(parse_name(r[EMAIL]),name,name))
         r[PAIR] = requests 
         r[NEW] = (r[NEW] == YES)
         data_out[parse_name(r[EMAIL])] = r 
+    if len(unrecognized_names) != 0:
+        print("WARNING: pairing requests contained some names that were not recognized and therefore ignored: %s.\nIf these are names for people who did in fact sign up, please change them in the data file to match the person's kerberos or email address." %", ".join(unrecognized_names))
     return data_out
 
 def clean_data(data_rows):
@@ -1237,6 +1269,8 @@ def display_stats(data):
     print("Cooking (%s shifts) -- %s yes, %s maybe" %(len([s for s in Schedule.shifts if s.is_cooking]), *get_stats(data, COOK)))
     print("Cleaning (%s shifts) -- %s yes, %s maybe" %(len([s for s in Schedule.shifts if not s.is_cooking]), *get_stats(data, CLEAN)))
     print("Big cooking (%s shifts) -- %s yes, %s maybe" %(len([s for s in Schedule.shifts if s.is_big_cooking]), *get_stats(data, BIGCOOK)))
+    nshifts_possible = sum([(1 if data[name][FULL_OR_HALF] == HALF else 2) for name in data])
+    print("%s shifts are needed. There are enough people to fill %s shifts." %(len(Schedule.shifts), nshifts_possible))
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -1262,12 +1296,4 @@ if __name__ == "__main__":
         sys.exit()
 
 
-# TODO: tab-complete for 'load'
-# TODO: warnings need to be unique!
 # TODO: suggest switches that would make everyone happier (maybe only at the end, or when explicitly requested)
-# TODO: show warnings after state changes
-# TODO: show pairing requests in 'show notes'
-# TODO: in stats, say how many extra shifts / how many shifts short
-# TODO: at the beginning, detect if there are not enough people to fill all cooking/cleaning shifts, and if there are not enough big cooks.
-# TODO: too many shifts warning might not be counting 'other'
-# TODO: currently people can be assigned to other multiple times
