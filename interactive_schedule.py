@@ -1122,8 +1122,8 @@ class Loop(cmd.Cmd):
         print("")
         for warning in self.state.get_warnings():
             print("WARNING: %s" %warning)
-
-    def display_status(self, shift_type=None):
+    
+    def display_status_list(self, shift_type=None):
         table = {str(s) : [] for s in Schedule.shifts}
         possibilities_by_shift = self.state.get_possibilities_by_shift(maybe_is_no=self.maybe_is_no)
         for s in Schedule.shifts:
@@ -1159,6 +1159,89 @@ class Loop(cmd.Cmd):
                     count_str = "(%s yes, %s maybe) " %(yes_count, maybe_count)
                 print("%s %s: %s" %(s, count_str, "; ".join(table[str(s)]))) 
                 already_printed.append(str(s))
+        self.display_warnings()
+
+    def display_status(self, shift_type=None):
+        table = {str(s) : [] for s in Schedule.shifts}
+        possibilities_by_shift = self.state.get_possibilities_by_shift(maybe_is_no=self.maybe_is_no)
+        for s in Schedule.shifts:
+            if s in self.state.assignments:
+                table[str(s)].append((0, "[%s]" %self.state.assignments[s]))
+            else:
+                for p, notes in possibilities_by_shift[s]:
+                    p = self.state.format_name(p)
+                    n = len(notes)
+                    table[str(s)].append((n, ("(" * n) + p + (")" * n)))
+        for c in table:
+            table[c] = sorted(list(set(table[c]))) # remove duplicate entries for cleaning shifts
+            table[c] = list(map(lambda x : x[1], table[c]))
+
+        cols, _ = os.get_terminal_size()
+        first_col_size = max(map(len, SHIFT_TYPES)) + 3 # +3 is for a divider and a space on each side of it 
+        cols_per_day = int((cols - first_col_size - 3) / (len(DAYS))) - 3 # subtract 3 to leave room for a divider pipe and a space on either side # TODO: use this to determine whether to do the grid or not
+
+        WEEKS = [WEEK1, WEEK2] # TODO: make this a constant
+        shift_types = [shift_type] if shift_type != None else SHIFT_TYPES
+        table2 = {d : {t : {w : "" for w in WEEKS} for t in shift_types} for d in DAYS}
+        for s in Schedule.shifts:
+            if s.type in shift_types:
+                table2[s.day][s.type][s.week] = table[str(s)]
+
+        display_rows = []
+        display_rows.append([""] + [d for d in DAYS]) # first row is the header 
+        for t in shift_types:
+            row = [t] # first column is the type of shift
+            for d in DAYS:
+                n_subrows = len(set(map(frozenset, table2[d][t].values())))
+                if n_subrows == 1:
+                    subrows = [table2[d][t][WEEK1]]
+                else:
+                    subrows = [table2[d][t][w] for w in WEEKS]
+                # okay, now each subrow is actually a list of names
+                subrow_strings = []
+                for subrow in subrows:
+                    subrow_lines = []
+                    line = ""
+                    for name in subrow:
+                        # TODO: things mess up if a name is longer than the number of columns
+                        # if we can add it to the most recent line, do so
+                        new_line = line + name + "; "
+                        if len(new_line) <= cols_per_day:
+                            line = new_line
+                        else: # start a new line
+                            subrow_lines.append(line)
+                            line = name + "; "
+                            while len(line) > cols_per_day:
+                                subrow_lines.append(line[:cols_per_day])
+                                line = line[cols_per_day:]
+                    subrow_lines.append(line) # add last line
+                    subrow_lines = ['{0:{width}s}'.format(line, width=cols_per_day) for line in subrow_lines]
+                    subrow_strings.append("".join(subrow_lines))
+                divider = "-" * cols_per_day
+                row.append(divider.join(subrow_strings))
+            display_rows.append(row)
+
+
+        row_max_chars = [max(r, key=len) for r in display_rows]
+        row_heights = [int(len(c) / cols_per_day) + 1 for c in row_max_chars]
+
+        display_lines = []
+        row_divider = " +" + ("-" * ((cols_per_day + 3) * len(DAYS) + first_col_size + 2)) + "+ "
+        display_lines.append(row_divider)
+        for i in range(len(display_rows)):
+            for j in range(row_heights[i]):
+                # to form each line, take the characters in range(cols_per_day*j, cols_per_day*(j+1)) from each cell
+                line = []
+                for k in range(len(display_rows[i])):
+                    cell = display_rows[i][k]
+                    width = first_col_size if k == 0 else cols_per_day
+                    line.append("{0:{width}s}".format(cell[width * j:width * (j+1)], width=width))
+                display_lines.append(" | " + " | ".join(line) + " | ")
+            display_lines.append(row_divider)
+
+        for x in display_lines:
+            print(x)
+
         self.display_warnings()
 
 def parse_name(email):
@@ -1199,7 +1282,6 @@ def clean_pairing_requests(data_rows):
                 requests.append(name)
             else:
                 unrecognized_names.append(name)
-                #print("WARNING: removing preference for %s to be paired with %s, since %s did not sign up. If this is another name for someone who *did* sign up, change it in the data file." %(parse_name(r[EMAIL]),name,name))
         r[PAIR] = requests 
         r[NEW] = (r[NEW] == YES)
         data_out[parse_name(r[EMAIL])] = r 
